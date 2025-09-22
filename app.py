@@ -190,9 +190,6 @@ if menu == "Classificação":
         # posição com base na ordenação (1,2,3...)
         df["Posição"] = range(1, len(df) + 1)
 
-        # coluna de medalhas ao lado (para top3 mostra medalha)
-        df.insert(1, '🏅', df['Posição'].apply(lambda x: '🏅' if x <= 3 else ''))
-
         # renomear colunas para exibir bonito
         df = df.rename(columns={
             "nome": "Nome",
@@ -205,7 +202,20 @@ if menu == "Classificação":
             "tempo_defesa": "⏱ Def"
         })
 
-        # reordenar colunas: Posicao, medalha, Nome, ...
+        # adicionar medalhas ao lado do nome para top3 (sem criar coluna separada)
+        def add_medal(nome, pos):
+            if pos == 1:
+                return '🥇 ' + nome
+            elif pos == 2:
+                return '🥈 ' + nome
+            elif pos == 3:
+                return '🥉 ' + nome
+            else:
+                return nome
+
+        df['Nome'] = df.apply(lambda row: add_medal(row['Nome'], row['Posição']), axis=1)
+
+        # reordenar colunas: Posicao, Nome, ...
         cols = [c for c in df.columns if c != 'Posição']
         cols = ['Posição'] + cols
         df = df[cols]
@@ -215,9 +225,11 @@ if menu == "Classificação":
         styled_row_count = len(df)
         styled = df.style.apply(style_row, axis=1)
 
+        # regras CSS para esconder o cabeçalho/índice (compatível com várias versões do pandas)
         styled = styled.set_table_styles([
             {"selector": "th.row_heading", "props": [("display", "none")]},
-            {"selector": "th.blank", "props": [("display", "none")]}
+            {"selector": "th.blank", "props": [("display", "none")]},
+            {"selector": "td.row_heading", "props": [("display", "none")]}
         ])
 
         st.dataframe(
