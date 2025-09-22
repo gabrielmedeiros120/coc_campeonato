@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import itertools
 
 # =====================
 # Configuração inicial
@@ -25,10 +26,29 @@ if "df" not in st.session_state:
 df = st.session_state.df
 
 # =====================
+# Gerar confrontos (Round Robin)
+# =====================
+if "rodadas" not in st.session_state:
+    rodadas = []
+    n = len(players)
+    schedule = list(itertools.combinations(players, 2))  # todos contra todos
+    rodada = 1
+    rodada_atual = []
+    for i, match in enumerate(schedule, 1):
+        rodada_atual.append(match)
+        if len(rodada_atual) == n // 2:
+            rodadas.append((rodada, rodada_atual))
+            rodada_atual = []
+            rodada += 1
+    st.session_state.rodadas = rodadas
+
+rodadas = st.session_state.rodadas
+
+# =====================
 # Menu lateral
 # =====================
 st.sidebar.title("📌 Menu")
-page = st.sidebar.radio("Escolha uma página:", ["📊 Classificação", "⚔️ Registrar Duelos"])
+page = st.sidebar.radio("Escolha uma página:", ["📊 Classificação", "📅 Rodadas", "⚔️ Registrar Resultados"])
 
 # =====================
 # Página 1 – Classificação
@@ -37,7 +57,7 @@ if page == "📊 Classificação":
     st.title("🏆 Liga do 13º – Temporada 1")
     st.subheader("Tabela de Classificação")
 
-    # Ordenação por critérios de desempate
+    # Ordenação por critérios
     df_sorted = df.sort_values(
         by=[
             "Vitórias",
@@ -49,14 +69,29 @@ if page == "📊 Classificação":
             "Tempo Defesa"
         ],
         ascending=[False, False, True, False, True, True, True]
-    )
+    ).reset_index(drop=True)
 
-    st.dataframe(df_sorted, use_container_width=True)
+    # Adiciona posição
+    df_sorted.index = df_sorted.index + 1
+    df_sorted.index.name = "Posição"
+
+    st.dataframe(df_sorted, use_container_width=True, height=500)
 
 # =====================
-# Página 2 – Registrar Duelos
+# Página 2 – Rodadas
 # =====================
-elif page == "⚔️ Registrar Duelos":
+elif page == "📅 Rodadas":
+    st.title("📅 Rodadas do Campeonato")
+
+    for rodada, jogos in rodadas:
+        with st.expander(f"Rodada {rodada}"):
+            for j1, j2 in jogos:
+                st.write(f"⚔️ {j1} vs {j2}")
+
+# =====================
+# Página 3 – Registrar Resultados
+# =====================
+elif page == "⚔️ Registrar Resultados":
     st.title("⚔️ Registrar Resultado de Duelo")
 
     col1, col2 = st.columns(2)
@@ -74,10 +109,8 @@ elif page == "⚔️ Registrar Duelos":
 
     if st.button("Registrar Resultado"):
         if player_a != player_b:
-            # Vitórias
             vit_a, vit_b = (1,0) if estrelas_a > estrelas_b else (0,1) if estrelas_b > estrelas_a else (0,0)
 
-            # Atualiza estatísticas
             for p, vit, est_atk, est_def, porc_atk, porc_def, tempo_atk, tempo_def in [
                 (player_a, vit_a, estrelas_a, estrelas_b, porc_a, porc_b, tempo_a, tempo_b),
                 (player_b, vit_b, estrelas_b, estrelas_a, porc_b, porc_a, tempo_b, tempo_a)
