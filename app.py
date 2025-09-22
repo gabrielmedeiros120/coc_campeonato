@@ -241,42 +241,98 @@ if menu == "Classificação":
         n = len(df)
         rows = []
         rows.append('<style>')
-        rows.append('.classtable{font-family:Roboto, "Helvetica Neue", Arial; border-collapse:collapse; width:100%;}')
-        rows.append('.classtable th{background:#1f2933; color:#e5e7eb; padding:12px; text-align:left; border-top-left-radius:8px;}')
-        rows.append('.classtable th:last-child{border-top-right-radius:8px}')
-        rows.append('.classtable td{padding:10px;}')
-        rows.append('.classtable tr{transition: background 0.15s ease}')
-        rows.append('.classtable thead th{font-weight:600}')
+        rows.append('.classtable{font-family:Inter, Roboto, "Helvetica Neue", Arial; border-collapse:separate; border-spacing:0; width:100%; box-shadow: 0 6px 18px rgba(0,0,0,0.25); border-radius:10px; overflow:hidden;}')
+        rows.append('.classtable thead th{background:#0f1724; color:#e6eef3; padding:12px 14px; text-align:left; font-weight:700; border-bottom:1px solid rgba(255,255,255,0.04);}')
+        rows.append('.classtable tbody td{padding:10px 14px; vertical-align:middle;}')
+        rows.append('.classtable tbody tr:hover{filter:brightness(0.97);}')
+        rows.append('.classtable td.num, .classtable th.num{ text-align:center; font-variant-numeric: tabular-nums; }')
+        rows.append('.classtable td.name{ font-weight:500; }')
+        rows.append('.classtable td.pos{ width:64px; text-align:center; font-weight:700; }')
         rows.append('</style>')
 
+        # cores com contraste melhor
+        TOP_GREEN_1 = '#d9f5df'
+        TOP_GREEN_2 = '#c2ebc8'
+        BOTTOM_RED_1 = '#ffd6d6'
+        BOTTOM_RED_2 = '#ffb3b3'
+
+        def row_bg_color(idx, n):
+            if idx < 5:
+                return TOP_GREEN_1 if idx % 2 == 0 else TOP_GREEN_2
+            elif idx >= max(0, n - 5):
+                return BOTTOM_RED_1 if idx % 2 == 0 else BOTTOM_RED_2
+            else:
+                return 'transparent'
+
+        n = len(df)
         rows.append('<table class="classtable">')
         rows.append('<thead>')
         rows.append('<tr>')
+        # colunas com alinhamento numérico
+        numeric_cols = ['Vitórias', '⭐ Atk', '⭐ Def', '% Atk', '% Def', '⏱ Atk', '⏱ Def']
         for col in df.columns:
-            # cabeçalho — escapando qualquer < ou > por segurança simples
             header = str(col).replace('<', '&lt;').replace('>', '&gt;')
-            rows.append(f'<th>{header}</th>')
+            cls = 'num' if col in numeric_cols else ''
+            rows.append(f'<th class="{cls}">{header}</th>')
         rows.append('</tr>')
         rows.append('</thead>')
         rows.append('<tbody>')
 
+        # helper para formatar tempo (segundos -> MM:SS ou H:MM:SS)
+        def format_time_seconds(val):
+            try:
+                s = int(round(float(val)))
+            except:
+                return str(val)
+            h = s // 3600
+            m = (s % 3600) // 60
+            sec = s % 60
+            if h > 0:
+                return f"{h}:{m:02d}:{sec:02d}"
+            else:
+                return f"{m:02d}:{sec:02d}"
+
         for idx, row in df.reset_index(drop=True).iterrows():
             bg = row_bg_color(idx, n)
-            rows.append(f"<tr style='background:{bg}; color:#0b0b0b;'>")
+            rows.append(f"<tr style='background:{bg}; color:#071014;'>")
             for col in df.columns:
                 val = row[col]
-                # formata valores None como vazio e números com remoção de excesso
                 if pd.isna(val):
                     cell = ''
                 else:
-                    cell = val
-                rows.append(f'<td>{cell}</td>')
+                    if col in ['% Atk', '% Def']:
+                        # exibe porcentagem como inteiro com sinal % (arredondando)
+                        try:
+                            cell = f"{int(round(float(val)))}%"
+                        except:
+                            cell = str(val)
+                    elif col in ['⏱ Atk', '⏱ Def']:
+                        cell = format_time_seconds(val)
+                    elif col in ['Vitórias', '⭐ Atk', '⭐ Def', 'Posição']:
+                        try:
+                            cell = str(int(val))
+                        except:
+                            cell = str(val)
+                    else:
+                        cell = str(val)
+                # classes para alinhamento
+                if col == 'Nome':
+                    cell_cls = 'name'
+                elif col == 'Posição':
+                    cell_cls = 'pos'
+                elif col in numeric_cols:
+                    cell_cls = 'num'
+                else:
+                    cell_cls = ''
+
+                rows.append(f'<td class="{cell_cls}">{cell}</td>')
             rows.append('</tr>')
 
         rows.append('</tbody>')
         rows.append('</table>')
 
-        table_html = "\n".join(rows)
+        table_html = "
+".join(rows)
         st.markdown(table_html, unsafe_allow_html=True)
 
 
