@@ -1,230 +1,186 @@
 import streamlit as st
 import sqlite3
+import random
 import pandas as pd
 
-# ---------------------------
-# CONFIGURAÇÃO INICIAL
-# ---------------------------
-players = [
-    "Necrod", "Mayara", "Cabo", "Cronos", "Ramos",
-    "Diogo", "Senju", "Erick", "Magnata", "Vanahein"
-]
-
-# ---------------------------
+# ==============================
 # BANCO DE DADOS
-# ---------------------------
+# ==============================
 def init_db():
-    conn = sqlite3.connect("liga.db")
+    conn = sqlite3.connect("camp.db")
     c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS players (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 name TEXT UNIQUE)''')
 
-    # Tabela de jogadores
-    c.execute('''CREATE TABLE IF NOT EXISTS jogadores (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    nome TEXT UNIQUE,
-                    vitorias INTEGER DEFAULT 0,
-                    estrelas_ataque INTEGER DEFAULT 0,
-                    estrelas_defesa INTEGER DEFAULT 0,
-                    porc_ataque REAL DEFAULT 0,
-                    porc_defesa REAL DEFAULT 0,
-                    tempo_ataque REAL DEFAULT 0,
-                    tempo_defesa REAL DEFAULT 0
-                )''')
-
-    # Tabela de rodadas
-    c.execute('''CREATE TABLE IF NOT EXISTS rodadas (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    rodada INTEGER,
-                    jogador1 TEXT,
-                    jogador2 TEXT,
-                    estrelas_j1 INTEGER,
-                    estrelas_j2 INTEGER,
-                    porc_j1 REAL,
-                    porc_j2 REAL,
-                    tempo_j1 REAL,
-                    tempo_j2 REAL
-                )''')
-
+    c.execute('''CREATE TABLE IF NOT EXISTS matches (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 round INTEGER,
+                 player1 TEXT,
+                 player2 TEXT,
+                 result TEXT)''')
     conn.commit()
-    return conn
+    conn.close()
 
-# ---------------------------
-# FUNÇÕES AUXILIARES
-# ---------------------------
-def get_jogadores(conn):
-    return pd.read_sql("SELECT * FROM jogadores", conn)
-
-def get_rodadas(conn):
-    return pd.read_sql("SELECT * FROM rodadas", conn)
-
-def inicializar_jogadores(conn):
-    for nome in players:
-        try:
-            conn.execute("INSERT INTO jogadores (nome) VALUES (?)", (nome,))
-        except:
-            pass
+def add_players(players):
+    conn = sqlite3.connect("camp.db")
+    c = conn.cursor()
+    for p in players:
+        c.execute("INSERT OR IGNORE INTO players (name) VALUES (?)", (p,))
     conn.commit()
+    conn.close()
 
-def gerar_rodadas(conn):
-    existentes = pd.read_sql("SELECT COUNT(*) as qtd FROM rodadas", conn).iloc[0]["qtd"]
-    if existentes > 0:
-        return
-    
+def generate_rounds(players):
     n = len(players)
-    lista = players.copy()
-    if n % 2 != 0:
-        lista.append("BYE")
-        n += 1
-    
-    rodadas = []
+    rounds = []
     for i in range(n - 1):
-        pares = []
+        round_matches = []
         for j in range(n // 2):
-            p1 = lista[j]
-            p2 = lista[n - 1 - j]
-            if p1 != "BYE" and p2 != "BYE":
-                pares.append((p1, p2))
-        rodadas.append(pares)
-        lista.insert(1, lista.pop())
-    
-    for r, jogos in enumerate(rodadas, start=1):
-        for j1, j2 in jogos:
-            conn.execute("""INSERT INTO rodadas 
-                            (rodada, jogador1, jogador2, estrelas_j1, estrelas_j2, porc_j1, porc_j2, tempo_j1, tempo_j2)
-                            VALUES (?, ?, ?, 0, 0, 0, 0, 0, 0)""",
-                         (r, j1, j2))
+            p1 = players[j]
+            p2 = players[n - 1 - j]
+            round_matches.append((p1, p2))
+        players = [players[0]] + [players[-1]] + players[1:-1]
+        rounds.append(round_matches)
+    return rounds
+
+def save_rounds(rounds):
+    conn = sqlite3.connect("camp.db")
+    c = conn.cursor()
+    for r, matches in enumerate(rounds, 1):
+        for p1, p2 in matches:
+            c.execute("INSERT INTO matches (round, player1, player2, result) VALUES (?, ?, ?, ?)",
+                      (r, p1, p2, None))
     conn.commit()
+    conn.close()
 
-def registrar_resultado(conn, rodada, j1, j2, e1, e2, p1, p2, t1, t2):
-    conn.execute("""UPDATE rodadas SET 
-                        estrelas_j1=?, estrelas_j2=?, 
-                        porc_j1=?, porc_j2=?, 
-                        tempo_j1=?, tempo_j2=?
-                    WHERE rodada=? AND jogador1=? AND jogador2=?""",
-                 (e1, e2, p1, p2, t1, t2, rodada, j1, j2))
-    conn.commit()
-    atualizar_classificacao(conn, j1, j2, e1, e2, p1, p2, t1, t2)
-
-def atualizar_classificacao(conn, j1, j2, e1, e2, p1, p2, t1, t2):
-    if e1 > e2:
-        conn.execute("UPDATE jogadores SET vitorias = vitorias + 1 WHERE nome = ?", (j1,))
-    elif e2 > e1:
-        conn.execute("UPDATE jogadores SET vitorias = vitorias + 1 WHERE nome = ?", (j2,))
-
-    conn.execute("UPDATE jogadores SET estrelas_ataque = estrelas_ataque + ? WHERE nome = ?", (e1, j1))
-    conn.execute("UPDATE jogadores SET estrelas_ataque = estrelas_ataque + ? WHERE nome = ?", (e2, j2))
-
-    conn.execute("UPDATE jogadores SET estrelas_defesa = estrelas_defesa + ? WHERE nome = ?", (e2, j1))
-    conn.execute("UPDATE jogadores SET estrelas_defesa = estrelas_defesa + ? WHERE nome = ?", (e1, j2))
-
-    conn.execute("UPDATE jogadores SET porc_ataque = porc_ataque + ?, porc_defesa = porc_defesa + ? WHERE nome = ?", (p1, p2, j1))
-    conn.execute("UPDATE jogadores SET porc_ataque = porc_ataque + ?, porc_defesa = porc_defesa + ? WHERE nome = ?", (p2, p1, j2))
-
-    conn.execute("UPDATE jogadores SET tempo_ataque = tempo_ataque + ?, tempo_defesa = tempo_defesa + ? WHERE nome = ?", (t1, t2, j1))
-    conn.execute("UPDATE jogadores SET tempo_ataque = tempo_ataque + ?, tempo_defesa = tempo_defesa + ? WHERE nome = ?", (t2, t1, j2))
-
-    conn.commit()
-
-# ---------------------------
-# ESTILO VISUAL
-# ---------------------------
-def highlight_top3(row):
-    if row["Posição"] == 1:
-        return ['background-color: gold; font-weight: bold'] * len(row)
-    elif row["Posição"] == 2:
-        return ['background-color: silver; font-weight: bold'] * len(row)
-    elif row["Posição"] == 3:
-        return ['background-color: #cd7f32; font-weight: bold'] * len(row)
+# ==============================
+# FUNÇÕES AUXILIARES
+# ==============================
+def get_matches(round_number=None):
+    conn = sqlite3.connect("camp.db")
+    c = conn.cursor()
+    if round_number:
+        c.execute("SELECT * FROM matches WHERE round = ?", (round_number,))
     else:
-        return [''] * len(row)
+        c.execute("SELECT * FROM matches")
+    matches = c.fetchall()
+    conn.close()
+    return matches
 
-# ---------------------------
-# APP STREAMLIT
-# ---------------------------
-st.set_page_config(page_title="Liga do 13°", layout="wide")
-st.title("🏆 Liga do 13° – Temporada 1")
+def update_result(match_id, result):
+    conn = sqlite3.connect("camp.db")
+    c = conn.cursor()
+    c.execute("UPDATE matches SET result = ? WHERE id = ?", (result, match_id))
+    conn.commit()
+    conn.close()
 
-conn = init_db()
-inicializar_jogadores(conn)
-gerar_rodadas(conn)
+def get_classification():
+    conn = sqlite3.connect("camp.db")
+    c = conn.cursor()
+    c.execute("SELECT name FROM players")
+    players = [row[0] for row in c.fetchall()]
+    conn.close()
 
-menu = st.sidebar.radio("Navegação", ["Classificação", "Rodadas", "Cadastrar Resultados"])
+    scores = {p: 0 for p in players}
+    matches = get_matches()
 
-# ---------------------------
-# CLASSIFICAÇÃO
-# ---------------------------
-if menu == "Classificação":
-    st.subheader("📊 Tabela de Classificação")
+    for m in matches:
+        _, _, p1, p2, result = m
+        if result == "p1":
+            scores[p1] += 3
+        elif result == "p2":
+            scores[p2] += 3
+        elif result == "draw":
+            scores[p1] += 1
+            scores[p2] += 1
 
-    df = get_jogadores(conn)
-    if not df.empty:
-        df = df.sort_values(
-            by=["vitorias", "estrelas_ataque", "estrelas_defesa", 
-                "porc_ataque", "porc_defesa", "tempo_ataque", "tempo_defesa"],
-            ascending=[False, False, True, False, True, True, True]
-        ).reset_index(drop=True)
+    df = pd.DataFrame(scores.items(), columns=["Jogador", "Pontos"])
+    df = df.sort_values(by="Pontos", ascending=False).reset_index(drop=True)
+    return df
 
-        # Posição com empates (ex: 1,2,2,4)
-        df["Posição"] = df.rank(
-            method="min", 
-            ascending=False, 
-            numeric_only=True
-        )["vitorias"].astype(int)
+# ==============================
+# STREAMLIT APP
+# ==============================
+st.set_page_config(page_title="Campeonato do Clã", layout="centered")
+st.title("🏆 Campeonato do Clã")
 
-        df = df.rename(columns={
-            "nome": "Nome",
-            "vitorias": "Vitórias",
-            "estrelas_ataque": "⭐ Atk",
-            "estrelas_defesa": "⭐ Def",
-            "porc_ataque": "% Atk",
-            "porc_defesa": "% Def",
-            "tempo_ataque": "⏱ Atk",
-            "tempo_defesa": "⏱ Def"
-        })
+menu = ["Classificação", "Rodadas", "Cadastrar resultados"]
+choice = st.sidebar.radio("Menu", menu)
 
-        cols = ["Posição"] + [c for c in df.columns if c != "Posição"]
-        df = df[cols]
+if choice == "Classificação":
+    st.header("Tabela de Classificação")
 
-        st.dataframe(
-            df.style.apply(highlight_top3, axis=1),
-            use_container_width=True
-        )
+    df = get_classification()
 
-# ---------------------------
-# RODADAS
-# ---------------------------
-elif menu == "Rodadas":
-    st.subheader("📅 Rodadas")
-    rodadas = get_rodadas(conn)
-    if rodadas.empty:
-        st.info("Nenhum confronto registrado ainda.")
-    else:
-        for r in sorted(rodadas["rodada"].unique()):
-            st.markdown(f"### Rodada {r}")
-            st.dataframe(
-                rodadas[rodadas["rodada"] == r][["jogador1", "jogador2", "estrelas_j1", "estrelas_j2"]],
-                use_container_width=True
+    # Cores customizadas
+    def row_style(row):
+        idx = row.name
+        if idx < 5:  # Top 5
+            return ['background-color: {}'.format('#b6fcb6' if idx % 2 == 0 else '#d7fcd7')] * len(row)
+        elif idx >= len(df) - 5:  # Últimos 5
+            return ['background-color: {}'.format('#fcb6b6' if idx % 2 == 0 else '#fcd7d7')] * len(row)
+        else:
+            return [''] * len(row)
+
+    # Medalhas top 3
+    medalhas = ["🥇", "🥈", "🥉"] + [""] * (len(df) - 3)
+    df.insert(0, "", medalhas)
+
+    st.dataframe(df.style.apply(row_style, axis=1), use_container_width=True)
+
+elif choice == "Rodadas":
+    st.header("Rodadas")
+    rounds = set([m[1] for m in get_matches()])
+    for r in sorted(rounds):
+        st.subheader(f"Rodada {r}")
+        matches = get_matches(r)
+        for m in matches:
+            _, _, p1, p2, result = m
+            res_text = "⏳ Em aberto"
+            if result == "p1":
+                res_text = f"✅ {p1} venceu"
+            elif result == "p2":
+                res_text = f"✅ {p2} venceu"
+            elif result == "draw":
+                res_text = "🤝 Empate"
+            st.write(f"{p1} x {p2} → {res_text}")
+
+elif choice == "Cadastrar resultados":
+    st.header("Cadastrar resultados")
+    matches = get_matches()
+    for m in matches:
+        match_id, round_num, p1, p2, result = m
+        col1, col2, col3 = st.columns([2, 2, 3])
+        with col1:
+            st.write(f"Rodada {round_num}: {p1} x {p2}")
+        with col2:
+            novo_resultado = st.selectbox(
+                "Resultado",
+                ["", f"{p1} venceu", f"{p2} venceu", "Empate"],
+                index=0,
+                key=f"result_{match_id}"
             )
+        with col3:
+            if st.button("Salvar", key=f"save_{match_id}"):
+                if novo_resultado == f"{p1} venceu":
+                    update_result(match_id, "p1")
+                elif novo_resultado == f"{p2} venceu":
+                    update_result(match_id, "p2")
+                elif novo_resultado == "Empate":
+                    update_result(match_id, "draw")
+                st.success("Resultado atualizado!")
+                st.rerun()
 
-# ---------------------------
-# CADASTRAR RESULTADOS
-# ---------------------------
-elif menu == "Cadastrar Resultados":
-    st.subheader("✍️ Registrar Resultado")
-
-    rodadas = get_rodadas(conn)
-    rodada = st.selectbox("Rodada", sorted(rodadas["rodada"].unique()))
-    jogos = rodadas[rodadas["rodada"] == rodada][["jogador1", "jogador2"]].values.tolist()
-
-    jogo = st.selectbox("Confronto", [f"{j1} vs {j2}" for j1, j2 in jogos])
-    j1, j2 = jogo.split(" vs ")
-
-    e1 = st.number_input(f"⭐ Estrelas {j1}", 0, 3, step=1)
-    e2 = st.number_input(f"⭐ Estrelas {j2}", 0, 3, step=1)
-    p1 = st.number_input(f"% Ataque {j1}", 0.0, 100.0, step=0.1)
-    p2 = st.number_input(f"% Ataque {j2}", 0.0, 100.0, step=0.1)
-    t1 = st.number_input(f"⏱️ Tempo {j1} (segundos)", 0.0, 300.0, step=1.0)
-    t2 = st.number_input(f"⏱️ Tempo {j2} (segundos)", 0.0, 300.0, step=1.0)
-
-    if st.button("Salvar Resultado"):
-        registrar_resultado(conn, rodada, j1, j2, e1, e2, p1, p2, t1, t2)
-        st.success("Resultado registrado com sucesso ✅")
+# ==============================
+# INICIALIZAÇÃO DO BANCO
+# ==============================
+if "initialized" not in st.session_state:
+    init_db()
+    players = [
+        "Necrod", "Mayara", "Cabo", "Cronos", "Ramos",
+        "Diogo", "Senju", "Erick", "Magnata", "Vanahein"
+    ]
+    add_players(players)
+    rounds = generate_rounds(players)
+    save_rounds(rounds)
+    st.session_state.initialized = True
