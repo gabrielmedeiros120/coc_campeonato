@@ -213,7 +213,12 @@ if menu == "Classificação":
         # Preparar o Styler e aplicar estilos linha-a-linha (usa variável global para contar linhas)
         global styled_row_count
         styled_row_count = len(df)
-        styled = df.style.apply(style_row, axis=1).hide_index()
+        styled = df.style.apply(style_row, axis=1)
+
+        styled = styled.set_table_styles([
+            {"selector": "th.row_heading", "props": [("display", "none")]},
+            {"selector": "th.blank", "props": [("display", "none")]}
+        ])
 
         st.dataframe(
             styled,
