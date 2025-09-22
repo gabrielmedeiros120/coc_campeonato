@@ -237,41 +237,46 @@ if menu == "Classificação":
             else:
                 return 'transparent'
 
-        # construir HTML da tabela manualmente (index removido)
+        # construir a tabela usando lista de linhas (evita problemas com literais multilinha)
         n = len(df)
-        table_html = '''
-        <style>
-        .classtable{font-family:Roboto, "Helvetica Neue", Arial; border-collapse:collapse; width:100%;}
-        .classtable th{background:#1f2933; color:#e5e7eb; padding:12px; text-align:left; border-top-left-radius:8px;}
-        .classtable th:last-child{border-top-right-radius:8px}
-        .classtable td{padding:10px;}
-        .classtable tr{transition: background 0.15s ease}
-        .classtable thead th{font-weight:600}
-        </style>
-        <table class="classtable">
-            <thead>
-                <tr>'''
+        rows = []
+        rows.append('<style>')
+        rows.append('.classtable{font-family:Roboto, "Helvetica Neue", Arial; border-collapse:collapse; width:100%;}')
+        rows.append('.classtable th{background:#1f2933; color:#e5e7eb; padding:12px; text-align:left; border-top-left-radius:8px;}')
+        rows.append('.classtable th:last-child{border-top-right-radius:8px}')
+        rows.append('.classtable td{padding:10px;}')
+        rows.append('.classtable tr{transition: background 0.15s ease}')
+        rows.append('.classtable thead th{font-weight:600}')
+        rows.append('</style>')
 
+        rows.append('<table class="classtable">')
+        rows.append('<thead>')
+        rows.append('<tr>')
         for col in df.columns:
-            table_html += f"<th>{col}</th>"
-        table_html += "</tr>
-            </thead>
-            <tbody>
-"
+            # cabeçalho — escapando qualquer < ou > por segurança simples
+            header = str(col).replace('<', '&lt;').replace('>', '&gt;')
+            rows.append(f'<th>{header}</th>')
+        rows.append('</tr>')
+        rows.append('</thead>')
+        rows.append('<tbody>')
 
         for idx, row in df.reset_index(drop=True).iterrows():
             bg = row_bg_color(idx, n)
-            # texto em cor escura para melhor contraste sobre fundo claro
-            table_html += f"<tr style='background:{bg}; color:#0b0b0b;'>"
+            rows.append(f"<tr style='background:{bg}; color:#0b0b0b;'>")
             for col in df.columns:
                 val = row[col]
-                table_html += f"<td>{val}</td>"
-            table_html += "</tr>
-"
+                # formata valores None como vazio e números com remoção de excesso
+                if pd.isna(val):
+                    cell = ''
+                else:
+                    cell = val
+                rows.append(f'<td>{cell}</td>')
+            rows.append('</tr>')
 
-        table_html += "</tbody>
-</table>"
+        rows.append('</tbody>')
+        rows.append('</table>')
 
+        table_html = "\n".join(rows)
         st.markdown(table_html, unsafe_allow_html=True)
 
 
