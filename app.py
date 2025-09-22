@@ -1,7 +1,6 @@
 import streamlit as st
 import sqlite3
 import pandas as pd
-import random
 
 # ---------------------------
 # CONFIGURAÇÃO INICIAL
@@ -66,12 +65,10 @@ def inicializar_jogadores(conn):
     conn.commit()
 
 def gerar_rodadas(conn):
-    # Se já tiver rodadas cadastradas, não gera de novo
     existentes = pd.read_sql("SELECT COUNT(*) as qtd FROM rodadas", conn).iloc[0]["qtd"]
     if existentes > 0:
         return
     
-    # Algoritmo round-robin
     n = len(players)
     lista = players.copy()
     if n % 2 != 0:
@@ -89,7 +86,6 @@ def gerar_rodadas(conn):
         rodadas.append(pares)
         lista.insert(1, lista.pop())
     
-    # Inserir no banco
     for r, jogos in enumerate(rodadas, start=1):
         for j1, j2 in jogos:
             conn.execute("""INSERT INTO rodadas 
@@ -109,29 +105,37 @@ def registrar_resultado(conn, rodada, j1, j2, e1, e2, p1, p2, t1, t2):
     atualizar_classificacao(conn, j1, j2, e1, e2, p1, p2, t1, t2)
 
 def atualizar_classificacao(conn, j1, j2, e1, e2, p1, p2, t1, t2):
-    # vitórias
     if e1 > e2:
         conn.execute("UPDATE jogadores SET vitorias = vitorias + 1 WHERE nome = ?", (j1,))
     elif e2 > e1:
         conn.execute("UPDATE jogadores SET vitorias = vitorias + 1 WHERE nome = ?", (j2,))
 
-    # estrelas ataque
     conn.execute("UPDATE jogadores SET estrelas_ataque = estrelas_ataque + ? WHERE nome = ?", (e1, j1))
     conn.execute("UPDATE jogadores SET estrelas_ataque = estrelas_ataque + ? WHERE nome = ?", (e2, j2))
 
-    # estrelas defesa
     conn.execute("UPDATE jogadores SET estrelas_defesa = estrelas_defesa + ? WHERE nome = ?", (e2, j1))
     conn.execute("UPDATE jogadores SET estrelas_defesa = estrelas_defesa + ? WHERE nome = ?", (e1, j2))
 
-    # porcentagem
     conn.execute("UPDATE jogadores SET porc_ataque = porc_ataque + ?, porc_defesa = porc_defesa + ? WHERE nome = ?", (p1, p2, j1))
     conn.execute("UPDATE jogadores SET porc_ataque = porc_ataque + ?, porc_defesa = porc_defesa + ? WHERE nome = ?", (p2, p1, j2))
 
-    # tempo
     conn.execute("UPDATE jogadores SET tempo_ataque = tempo_ataque + ?, tempo_defesa = tempo_defesa + ? WHERE nome = ?", (t1, t2, j1))
     conn.execute("UPDATE jogadores SET tempo_ataque = tempo_ataque + ?, tempo_defesa = tempo_defesa + ? WHERE nome = ?", (t2, t1, j2))
 
     conn.commit()
+
+# ---------------------------
+# ESTILO VISUAL
+# ---------------------------
+def highlight_top3(row):
+    if row["Posição"] == 1:
+        return ['background-color: gold; font-weight: bold'] * len(row)
+    elif row["Posição"] == 2:
+        return ['background-color: silver; font-weight: bold'] * len(row)
+    elif row["Posição"] == 3:
+        return ['background-color: #cd7f32; font-weight: bold'] * len(row)
+    else:
+        return [''] * len(row)
 
 # ---------------------------
 # APP STREAMLIT
@@ -153,38 +157,38 @@ if menu == "Classificação":
 
     df = get_jogadores(conn)
     if not df.empty:
-        # Ordenação com todos os critérios de desempate
         df = df.sort_values(
-            by=[
-                "vitorias",          # mais vitórias primeiro
-                "estrelas_ataque",   # mais estrelas ataque
-                "estrelas_defesa",   # menos estrelas sofridas
-                "porc_ataque",       # maior % ataque
-                "porc_defesa",       # menor % defesa sofrida
-                "tempo_ataque",      # menor tempo ataque
-                "tempo_defesa"       # menor tempo defesa
-            ],
-            ascending=[
-                False,   # vitórias desc
-                False,   # estrelas ataque desc
-                True,    # estrelas defesa asc
-                False,   # % ataque desc
-                True,    # % defesa asc
-                True,    # tempo ataque asc
-                True     # tempo defesa asc
-            ]
+            by=["vitorias", "estrelas_ataque", "estrelas_defesa", 
+                "porc_ataque", "porc_defesa", "tempo_ataque", "tempo_defesa"],
+            ascending=[False, False, True, False, True, True, True]
         ).reset_index(drop=True)
 
-        # Adiciona posição
-        df.insert(0, "Posição", range(1, len(df) + 1))
+        # Posição com empates (ex: 1,2,2,4)
+        df["Posição"] = df.rank(
+            method="min", 
+            ascending=False, 
+            numeric_only=True
+        )["vitorias"].astype(int)
+
+        df = df.rename(columns={
+            "nome": "Nome",
+            "vitorias": "Vitórias",
+            "estrelas_ataque": "⭐ Atk",
+            "estrelas_defesa": "⭐ Def",
+            "porc_ataque": "% Atk",
+            "porc_defesa": "% Def",
+            "tempo_ataque": "⏱ Atk",
+            "tempo_defesa": "⏱ Def"
+        })
+
+        cols = ["Posição"] + [c for c in df.columns if c != "Posição"]
+        df = df[cols]
 
         st.dataframe(
-            df[[
-                "Posição", "nome", "vitorias", "estrelas_ataque", "estrelas_defesa",
-                "porc_ataque", "porc_defesa", "tempo_ataque", "tempo_defesa"
-            ]],
+            df.style.apply(highlight_top3, axis=1),
             use_container_width=True
         )
+
 # ---------------------------
 # RODADAS
 # ---------------------------
@@ -196,8 +200,10 @@ elif menu == "Rodadas":
     else:
         for r in sorted(rodadas["rodada"].unique()):
             st.markdown(f"### Rodada {r}")
-            st.dataframe(rodadas[rodadas["rodada"] == r][["jogador1", "jogador2", "estrelas_j1", "estrelas_j2"]],
-                         use_container_width=True)
+            st.dataframe(
+                rodadas[rodadas["rodada"] == r][["jogador1", "jogador2", "estrelas_j1", "estrelas_j2"]],
+                use_container_width=True
+            )
 
 # ---------------------------
 # CADASTRAR RESULTADOS
