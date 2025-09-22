@@ -1,6 +1,7 @@
 import streamlit as st
 import sqlite3
 import pandas as pd
+import traceback
 
 # ---------------------------
 # CONFIGURAÇÃO INICIAL
@@ -166,6 +167,14 @@ st.title("🏆 Liga do 13° – Temporada 1")
 conn = init_db()
 inicializar_jogadores(conn)
 gerar_rodadas(conn)
+
+# DEBUG: mostra quantos jogadores o DB tem (ajuda a identificar por que a tabela pode não aparecer)
+try:
+    df_tmp = get_jogadores(conn)
+    st.write(f"DEBUG: jogadores cadastrados = {len(df_tmp)}")
+except Exception:
+    st.write("DEBUG: erro ao obter jogadores do DB")
+    st.text(traceback.format_exc())
 
 menu = st.sidebar.radio("Navegação", ["Classificação", "Rodadas", "Cadastrar Resultados"])
 
