@@ -220,22 +220,60 @@ if menu == "Classificação":
         cols = ['Posição'] + cols
         df = df[cols]
 
-        # Preparar o Styler e aplicar estilos linha-a-linha (usa variável global para contar linhas)
-        global styled_row_count
+        # Preparar e renderizar uma tabela HTML personalizada (remove totalmente a primeira coluna de índice)
         styled_row_count = len(df)
-        styled = df.style.apply(style_row, axis=1)
 
-        # regras CSS para esconder o cabeçalho/índice (compatível com várias versões do pandas)
-        styled = styled.set_table_styles([
-            {"selector": "th.row_heading", "props": [("display", "none")]},
-            {"selector": "th.blank", "props": [("display", "none")]},
-            {"selector": "td.row_heading", "props": [("display", "none")]}
-        ])
+        # cores menos "brancas" — tons mais saturados para melhor contraste
+        TOP_GREEN_1 = '#b7eac7'
+        TOP_GREEN_2 = '#9fe2b0'
+        BOTTOM_RED_1 = '#ffb3b3'
+        BOTTOM_RED_2 = '#ff9a9a'
 
-        st.dataframe(
-            styled,
-            use_container_width=True
-        )
+        def row_bg_color(idx, n):
+            if idx < 5:
+                return TOP_GREEN_1 if idx % 2 == 0 else TOP_GREEN_2
+            elif idx >= max(0, n - 5):
+                return BOTTOM_RED_1 if idx % 2 == 0 else BOTTOM_RED_2
+            else:
+                return 'transparent'
+
+        # construir HTML da tabela manualmente (index removido)
+        n = len(df)
+        table_html = '''
+        <style>
+        .classtable{font-family:Roboto, "Helvetica Neue", Arial; border-collapse:collapse; width:100%;}
+        .classtable th{background:#1f2933; color:#e5e7eb; padding:12px; text-align:left; border-top-left-radius:8px;}
+        .classtable th:last-child{border-top-right-radius:8px}
+        .classtable td{padding:10px;}
+        .classtable tr{transition: background 0.15s ease}
+        .classtable thead th{font-weight:600}
+        </style>
+        <table class="classtable">
+            <thead>
+                <tr>'''
+
+        for col in df.columns:
+            table_html += f"<th>{col}</th>"
+        table_html += "</tr>
+            </thead>
+            <tbody>
+"
+
+        for idx, row in df.reset_index(drop=True).iterrows():
+            bg = row_bg_color(idx, n)
+            # texto em cor escura para melhor contraste sobre fundo claro
+            table_html += f"<tr style='background:{bg}; color:#0b0b0b;'>"
+            for col in df.columns:
+                val = row[col]
+                table_html += f"<td>{val}</td>"
+            table_html += "</tr>
+"
+
+        table_html += "</tbody>
+</table>"
+
+        st.markdown(table_html, unsafe_allow_html=True)
+
 
 # ---------------------------
 # RODADAS
