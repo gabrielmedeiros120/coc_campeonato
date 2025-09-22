@@ -153,12 +153,38 @@ if menu == "Classificação":
 
     df = get_jogadores(conn)
     if not df.empty:
-        df["Posição"] = df["vitorias"].rank(method="dense", ascending=False).astype(int)
-        df = df.sort_values(by=["vitorias", "estrelas_ataque", "estrelas_defesa", "porc_ataque", "porc_defesa", "tempo_ataque"], 
-                            ascending=[False, False, True, False, True, True])
-        st.dataframe(df[["Posição", "nome", "vitorias", "estrelas_ataque", "estrelas_defesa", "porc_ataque", "porc_defesa", "tempo_ataque", "tempo_defesa"]],
-                     use_container_width=True)
+        # Ordenação com todos os critérios de desempate
+        df = df.sort_values(
+            by=[
+                "vitorias",          # mais vitórias primeiro
+                "estrelas_ataque",   # mais estrelas ataque
+                "estrelas_defesa",   # menos estrelas sofridas
+                "porc_ataque",       # maior % ataque
+                "porc_defesa",       # menor % defesa sofrida
+                "tempo_ataque",      # menor tempo ataque
+                "tempo_defesa"       # menor tempo defesa
+            ],
+            ascending=[
+                False,   # vitórias desc
+                False,   # estrelas ataque desc
+                True,    # estrelas defesa asc
+                False,   # % ataque desc
+                True,    # % defesa asc
+                True,    # tempo ataque asc
+                True     # tempo defesa asc
+            ]
+        ).reset_index(drop=True)
 
+        # Adiciona posição
+        df.insert(0, "Posição", range(1, len(df) + 1))
+
+        st.dataframe(
+            df[[
+                "Posição", "nome", "vitorias", "estrelas_ataque", "estrelas_defesa",
+                "porc_ataque", "porc_defesa", "tempo_ataque", "tempo_defesa"
+            ]],
+            use_container_width=True
+        )
 # ---------------------------
 # RODADAS
 # ---------------------------
