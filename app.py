@@ -125,17 +125,37 @@ def atualizar_classificacao(conn, j1, j2, e1, e2, p1, p2, t1, t2):
     conn.commit()
 
 # ---------------------------
-# ESTILO VISUAL
+# ESTILO VISUAL (NOVA LÓGICA)
 # ---------------------------
-def highlight_top3(row):
-    if row["Posição"] == 1:
-        return ['background-color: gold; font-weight: bold'] * len(row)
-    elif row["Posição"] == 2:
-        return ['background-color: silver; font-weight: bold'] * len(row)
-    elif row["Posição"] == 3:
-        return ['background-color: #cd7f32; font-weight: bold'] * len(row)
-    else:
-        return [''] * len(row)
+# Cores suaves verdes para top 5 (com zebra) e vermelhos para os 5 últimos
+TOP_GREEN_1 = '#e6f9e6'
+TOP_GREEN_2 = '#dff0e6'
+BOTTOM_RED_1 = '#fdecec'
+BOTTOM_RED_2 = '#f9d6d6'
+
+# Função que aplica estilo por linha usando o índice da linha (após ordenação)
+def style_row(row):
+    n = styled_row_count  # variável global definida onde o Styler é aplicado
+    idx = row.name  # 0-based index da linha após o sort/reset
+    styles = [''] * len(row)
+
+    # Top 5 (tons de verde, zebra)
+    if idx < 5:
+        shade = TOP_GREEN_1 if idx % 2 == 0 else TOP_GREEN_2
+        styles = [f'background-color: {shade};' for _ in row]
+        # destaque um pouco a posição e nome
+        try:
+            pos_i = list(row.index).index('Posição')
+            styles[pos_i] += ' font-weight: bold;'
+        except ValueError:
+            pass
+
+    # Bottom 5 (tons de vermelho, zebra)
+    elif idx >= max(0, n - 5):
+        shade = BOTTOM_RED_1 if idx % 2 == 0 else BOTTOM_RED_2
+        styles = [f'background-color: {shade};' for _ in row]
+
+    return styles
 
 # ---------------------------
 # APP STREAMLIT
@@ -157,19 +177,23 @@ if menu == "Classificação":
 
     df = get_jogadores(conn)
     if not df.empty:
+        # remove coluna id para não aparecer
+        df = df.drop(columns=['id'], errors='ignore')
+
+        # ordenação — mantém a lógica anterior, mas agora transformamos a posição em ordem absoluta
         df = df.sort_values(
             by=["vitorias", "estrelas_ataque", "estrelas_defesa", 
                 "porc_ataque", "porc_defesa", "tempo_ataque", "tempo_defesa"],
             ascending=[False, False, True, False, True, True, True]
         ).reset_index(drop=True)
 
-        # Posição com empates (ex: 1,2,2,4)
-        df["Posição"] = df.rank(
-            method="min", 
-            ascending=False, 
-            numeric_only=True
-        )["vitorias"].astype(int)
+        # posição com base na ordenação (1,2,3...)
+        df["Posição"] = range(1, len(df) + 1)
 
+        # coluna de medalhas ao lado (para top3 mostra medalha)
+        df.insert(1, '🏅', df['Posição'].apply(lambda x: '🏅' if x <= 3 else ''))
+
+        # renomear colunas para exibir bonito
         df = df.rename(columns={
             "nome": "Nome",
             "vitorias": "Vitórias",
@@ -181,11 +205,18 @@ if menu == "Classificação":
             "tempo_defesa": "⏱ Def"
         })
 
-        cols = ["Posição"] + [c for c in df.columns if c != "Posição"]
+        # reordenar colunas: Posicao, medalha, Nome, ...
+        cols = [c for c in df.columns if c != 'Posição']
+        cols = ['Posição'] + cols
         df = df[cols]
 
+        # Preparar o Styler e aplicar estilos linha-a-linha (usa variável global para contar linhas)
+        global styled_row_count
+        styled_row_count = len(df)
+        styled = df.style.apply(style_row, axis=1).hide_index()
+
         st.dataframe(
-            df.style.apply(highlight_top3, axis=1),
+            styled,
             use_container_width=True
         )
 
