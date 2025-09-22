@@ -331,47 +331,4 @@ if menu == "Classificação":
         rows.append('</tbody>')
         rows.append('</table>')
 
-        table_html = "
-".join(rows)
-        st.markdown(table_html, unsafe_allow_html=True)
-
-
-# ---------------------------
-# RODADAS
-# ---------------------------
-elif menu == "Rodadas":
-    st.subheader("📅 Rodadas")
-    rodadas = get_rodadas(conn)
-    if rodadas.empty:
-        st.info("Nenhum confronto registrado ainda.")
-    else:
-        for r in sorted(rodadas["rodada"].unique()):
-            st.markdown(f"### Rodada {r}")
-            st.dataframe(
-                rodadas[rodadas["rodada"] == r][["jogador1", "jogador2", "estrelas_j1", "estrelas_j2"]],
-                use_container_width=True
-            )
-
-# ---------------------------
-# CADASTRAR RESULTADOS
-# ---------------------------
-elif menu == "Cadastrar Resultados":
-    st.subheader("✍️ Registrar Resultado")
-
-    rodadas = get_rodadas(conn)
-    rodada = st.selectbox("Rodada", sorted(rodadas["rodada"].unique()))
-    jogos = rodadas[rodadas["rodada"] == rodada][["jogador1", "jogador2"]].values.tolist()
-
-    jogo = st.selectbox("Confronto", [f"{j1} vs {j2}" for j1, j2 in jogos])
-    j1, j2 = jogo.split(" vs ")
-
-    e1 = st.number_input(f"⭐ Estrelas {j1}", 0, 3, step=1)
-    e2 = st.number_input(f"⭐ Estrelas {j2}", 0, 3, step=1)
-    p1 = st.number_input(f"% Ataque {j1}", 0.0, 100.0, step=0.1)
-    p2 = st.number_input(f"% Ataque {j2}", 0.0, 100.0, step=0.1)
-    t1 = st.number_input(f"⏱️ Tempo {j1} (segundos)", 0.0, 300.0, step=1.0)
-    t2 = st.number_input(f"⏱️ Tempo {j2} (segundos)", 0.0, 300.0, step=1.0)
-
-    if st.button("Salvar Resultado"):
-        registrar_resultado(conn, rodada, j1, j2, e1, e2, p1, p2, t1, t2)
-        st.success("Resultado registrado com sucesso ✅")
+        table_html = "\n".join(rows)
