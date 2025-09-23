@@ -90,7 +90,7 @@ def get_players(only_active=True):
             df['nome'] = ''
         if 'tag' not in df.columns:
             df['tag'] = ''
-        return df
+        return df.reset_index(drop=True)
     except Exception as e:
         st.error(f"Erro ao buscar jogadores: {e}")
         return pd.DataFrame()
@@ -122,6 +122,10 @@ def get_admin_exists():
         return False
 
 def authenticate(username, password):
+    """
+    Retorna dict {'id','username','is_admin'} se ok, senão None.
+    Garante leitura correta do documento em Firestore.
+    """
     try:
         doc_ref = db.collection('usuarios').document(username)
         doc = doc_ref.get()
@@ -129,7 +133,7 @@ def authenticate(username, password):
         if not doc.exists:
             return None
             
-        user_data = doc.to_dict()
+        user_data = doc.to_dict() or {}
         if verify_password(password, user_data.get('passhash', '')):
             return {
                 'id': doc.id,
@@ -207,13 +211,11 @@ def get_active_temporada():
 # ---------------------------
 # -----------------------------------------
 # Helper: gera pares round-robin (método do círculo)
-# Retorna: lista de rodadas; cada rodada é lista de tuplas (id1, id2)
 # -----------------------------------------
 def generate_round_robin_pairs(ids):
     ids = list(ids)
     n = len(ids)
     bye = None
-    # se ímpar, adiciona bye (fica sem jogo naquela rodada)
     if n % 2 == 1:
         ids.append(bye)
         n += 1
@@ -226,35 +228,30 @@ def generate_round_robin_pairs(ids):
             b = arr[n - 1 - j]
             if a is not None and b is not None:
                 pairs.append((a, b))
-        # rotação: mantém arr[0] fixo, rotaciona o resto à direita
+        # rotate (keep first fixed)
         arr = [arr[0]] + [arr[-1]] + arr[1:-1]
         rounds.append(pairs)
     return rounds
 
 # -----------------------------------------
-# Função do app que insere no Firestore usando o helper acima
-# Substitui a implementação antiga de gerar_round_robin
+# Gera rodadas no Firestore usando helper
 # -----------------------------------------
 def gerar_round_robin(temporada_id):
     try:
-        players_df = get_players()  # sua função que busca jogadores do Firestore
+        players_df = get_players()
         if players_df.empty or len(players_df) < 2:
             return "Número insuficiente de jogadores (mínimo 2)."
 
-        # Se já existirem confrontos, impedimos duplicação (opcional: você pode forçar recriação)
+        # se já existem rodadas para a temporada, impedir duplicação (a menos que forçar)
         existing_query = db.collection('rodadas').where('temporada_id', '==', temporada_id)
         existing_docs = list(existing_query.stream())
         if len(existing_docs) > 0:
             return "Confrontos já foram gerados para esta temporada."
 
-        # lista de ids (strings)
         player_ids = players_df['id'].astype(str).tolist()
-
-        # gera pairs usando algoritmo round-robin
         rounds_pairs = generate_round_robin_pairs(player_ids)
         R = len(rounds_pairs)
 
-        # inserir no Firestore: rodada index começando em 1
         for rodada_idx, pairs in enumerate(rounds_pairs, start=1):
             for p1, p2 in pairs:
                 rodada_data = {
@@ -279,7 +276,6 @@ def gerar_round_robin(temporada_id):
 
 def get_rodadas_temporada(temporada_id):
     try:
-        # Evitar order_by no Firestore para não precisar de índice composto:
         query = db.collection('rodadas').where('temporada_id', '==', temporada_id)
         docs = list(query.stream())
         
@@ -516,6 +512,7 @@ if 'user' not in st.session_state:
 # --- Auth / setup (sidebar) ---
 with st.sidebar:
     st.markdown("### Usuário")
+    # show admin exists and login/create accordingly
     if not get_admin_exists():
         st.warning("Nenhum administrador encontrado. Crie um usuário admin para começar.")
         with st.form('create_admin'):
@@ -540,8 +537,13 @@ with st.sidebar:
                 if submitted:
                     auth = authenticate(uname.strip(), upass)
                     if auth:
+                        # ensure we read current is_admin value from Firestore doc
+                        # (authenticate already does that, but re-read to be safe)
+                        doc = db.collection('usuarios').document(auth['id']).get()
+                        user_doc = doc.to_dict() if doc.exists else {}
+                        is_admin_flag = user_doc.get('is_admin', False)
                         st.session_state['user'] = auth['username']
-                        st.session_state['is_admin'] = auth['is_admin']
+                        st.session_state['is_admin'] = bool(is_admin_flag)
                         st.session_state['logged_in'] = True
                         st.success(f"Logado como {auth['username']}")
                     else:
@@ -557,12 +559,9 @@ with st.sidebar:
 # Build menu dynamically based on permissions
 menu_items = ["Público - Classificação & Confrontos", "Minha Conta"]
 if st.session_state['logged_in']:
-    # logged users can view classification, rodadas, historico
     menu_items += ["Classificação", "Rodadas", "Histórico Individual"]
     if st.session_state['is_admin']:
-        # admin-only features
         menu_items += ["Cadastrar Resultados", "Jogadores", "Temporadas"]
-# show the menu
 menu = st.sidebar.selectbox("Menu", menu_items)
 
 # ---------------------------
@@ -648,7 +647,6 @@ elif menu == "Cadastrar Resultados":
             if rod.empty:
                 st.info("Nenhum confronto gerado para esta temporada.")
             else:
-                # build choices
                 choices = []
                 for _, r in rod.iterrows():
                     choices.append(f"ID {r['id']}: {r['jogador1']} vs {r['jogador2']} (R{r['rodada']})")
@@ -730,11 +728,23 @@ elif menu == "Jogadores":
             st.write(get_players(only_active=False))
 
 # ---------------------------
-# TEMPORADAS (APENAS ADMIN P/CRIAR/GERAR)
+# TEMPORADAS (APENAS ADMIN P/CRIAR/GERAR) - com Debug e Force Regenerate
 # ---------------------------
 elif menu == "Temporadas":
     st.subheader("🗂️ Temporadas")
-    if not st.session_state['is_admin']:
+
+    # DEBUG para admins: mostra state e amostra de docs (ajuda a diagnosticar sumiço de botão)
+    if st.session_state.get('logged_in') and st.session_state.get('is_admin'):
+        with st.expander("DEBUG (admin) - estado da sessão"):
+            st.write("st.session_state:", {k: st.session_state[k] for k in st.session_state.keys()})
+            try:
+                sample = list(db.collection('rodadas').limit(8).stream())
+                st.write("Exemplo doc rodadas (IDs):", [d.id for d in sample])
+                st.write("Total jogadores ativos:", len(get_players()))
+            except Exception as _e:
+                st.write("Erro amostra rodadas:", _e)
+
+    if not st.session_state.get('is_admin'):
         st.info('Apenas administradores podem criar/ativar temporadas. Aqui está a lista:')
         st.dataframe(get_temporadas(), use_container_width=True)
     else:
@@ -748,9 +758,48 @@ elif menu == "Temporadas":
                 else:
                     st.error("Erro ao criar temporada")
                 st.experimental_rerun()
+
         st.markdown("---")
         temporadas = get_temporadas()
         st.dataframe(temporadas, use_container_width=True)
+
+        st.markdown("### Gerar ou Recriar confrontos para a temporada ativa")
+        active = get_active_temporada()
+        if active is None:
+            st.info("Não há temporada ativa.")
+        else:
+            st.write(f"Temporada ativa: **{active.get('nome')}** (ID {active.get('id')})")
+            existing = list(db.collection('rodadas').where('temporada_id', '==', active.get('id')).limit(1).stream())
+            if not existing:
+                if st.button("Gerar Round-Robin para temporada ativa"):
+                    msg = gerar_round_robin(active.get('id'))
+                    if msg and not str(msg).lower().startswith('erro'):
+                        st.success(msg)
+                    else:
+                        st.error(msg)
+                    st.experimental_rerun()
+            else:
+                st.warning("Confrontos já foram gerados para esta temporada.")
+                st.markdown("Se deseja recriar os confrontos (apagar os atuais e gerar novos), use a opção abaixo.")
+                confirm = st.checkbox("Confirmo que quero apagar os confrontos atuais e recriar (backup será criado).")
+                if confirm:
+                    if st.button("FORÇAR RECRIAR CONFRONTOS (Apagar + Gerar)"):
+                        try:
+                            docs = list(db.collection('rodadas').where('temporada_id', '==', active.get('id')).stream())
+                            for d in docs:
+                                data = d.to_dict() or {}
+                                data['_original_id'] = d.id
+                                data['_backup_ts'] = datetime.utcnow().isoformat()
+                                db.collection('rodadas_backup').add(data)
+                                db.collection('rodadas').document(d.id).delete()
+                            msg = gerar_round_robin(active.get('id'))
+                            if msg and not str(msg).lower().startswith('erro'):
+                                st.success("Recriação concluída: " + msg)
+                            else:
+                                st.error("Erro durante recriação: " + str(msg))
+                        except Exception as e:
+                            st.error("Erro ao recriar confrontos (backup/delete/geração): " + str(e))
+                        st.experimental_rerun()
 
 # ---------------------------
 # HISTÓRICO INDIVIDUAL
@@ -777,4 +826,4 @@ elif menu == "Histórico Individual":
 # FIM
 # ---------------------------
 st.markdown("---")
-st.caption("© 13º Pelotão. Todos os direitos reservados || Cabo ~ Loki ~ Necrod)")
+st.caption("© 13º Pelotão. Todos os direitos reservados || Cabo ~ Loki ~ Necrod")
