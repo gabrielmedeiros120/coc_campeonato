@@ -1,0 +1,3 @@
+# .gitignore
+serviceAccountKey.json
+create_admin.py
