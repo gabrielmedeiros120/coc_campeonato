@@ -1,3 +1,4 @@
+# app.py
 import streamlit as st
 import pandas as pd
 import itertools
@@ -49,7 +50,7 @@ def add_player(nome, tag=None):
 
 def update_player(player_id, nome, tag):
     try:
-        db.collection('jogadores').document(player_id).update({
+        db.collection('jogadores').document(str(player_id)).update({
             'nome': nome,
             'tag': tag
         })
@@ -60,7 +61,8 @@ def update_player(player_id, nome, tag):
 
 def delete_player(player_id):
     try:
-        db.collection('jogadores').document(player_id).update({'ativo': False})
+        # soft delete: marca ativo = False
+        db.collection('jogadores').document(str(player_id)).update({'ativo': False})
         return True
     except Exception as e:
         st.error(f"Erro ao excluir jogador: {e}")
@@ -73,14 +75,22 @@ def get_players(only_active=True):
         else:
             query = db.collection('jogadores')
         
-        docs = query.stream()
+        docs = list(query.stream())
         players = []
         for doc in docs:
-            player_data = doc.to_dict()
+            player_data = doc.to_dict() or {}
             player_data['id'] = doc.id
             players.append(player_data)
         
-        return pd.DataFrame(players)
+        if not players:
+            return pd.DataFrame()
+        df = pd.DataFrame(players)
+        # Garantir colunas existentes
+        if 'nome' not in df.columns:
+            df['nome'] = ''
+        if 'tag' not in df.columns:
+            df['tag'] = ''
+        return df
     except Exception as e:
         st.error(f"Erro ao buscar jogadores: {e}")
         return pd.DataFrame()
@@ -105,8 +115,8 @@ def create_user(username, password, is_admin=False):
 def get_admin_exists():
     try:
         query = db.collection('usuarios').where('is_admin', '==', True).limit(1)
-        docs = query.stream()
-        return len(list(docs)) > 0
+        docs = list(query.stream())
+        return len(docs) > 0
     except Exception as e:
         st.error(f"Erro ao verificar admin: {e}")
         return False
@@ -120,10 +130,10 @@ def authenticate(username, password):
             return None
             
         user_data = doc.to_dict()
-        if verify_password(password, user_data['passhash']):
+        if verify_password(password, user_data.get('passhash', '')):
             return {
                 'id': doc.id,
-                'username': user_data['username'],
+                'username': user_data.get('username'),
                 'is_admin': user_data.get('is_admin', False)
             }
         return None
@@ -138,7 +148,7 @@ def create_temporada(nome):
     try:
         # Desativar temporadas ativas
         active_query = db.collection('temporadas').where('ativa', '==', True)
-        active_docs = active_query.stream()
+        active_docs = list(active_query.stream())
         for doc in active_docs:
             db.collection('temporadas').document(doc.id).update({'ativa': False})
         
@@ -148,21 +158,42 @@ def create_temporada(nome):
             'ativa': True,
             'criada_em': datetime.utcnow().isoformat()
         }
-        new_doc = db.collection('temporadas').add(temporada_data)
-        return new_doc[1].id
+        new_ref = db.collection('temporadas').add(temporada_data)
+        # new_ref returns (DocumentReference, write_time) — DocumentReference is index 0 in some admin versions, but add() returns tuple
+        # To be safe, fetch last added via query by created timestamp
+        # We'll attempt to return the new doc id intelligently:
+        if isinstance(new_ref, tuple) and len(new_ref) >= 1:
+            doc_ref = new_ref[0]
+            try:
+                return doc_ref.id
+            except Exception:
+                pass
+        # fallback: try to find by nome and criada_em recent
+        recent = list(db.collection('temporadas').where('nome', '==', nome).order_by('criada_em', direction=firestore.Query.DESCENDING).limit(1).stream())
+        if recent:
+            return recent[0].id
+        return None
     except Exception as e:
         st.error(f"Erro ao criar temporada: {e}")
         return None
 
 def get_temporadas():
     try:
-        docs = db.collection('temporadas').order_by('criada_em', direction=firestore.Query.DESCENDING).stream()
+        # Busca todas as temporadas e ordena em Python (evita dependência de índice)
+        docs = list(db.collection('temporadas').stream())
         temporadas = []
         for doc in docs:
-            temp_data = doc.to_dict()
+            temp_data = doc.to_dict() or {}
             temp_data['id'] = doc.id
             temporadas.append(temp_data)
-        return pd.DataFrame(temporadas)
+        if not temporadas:
+            return pd.DataFrame()
+        df = pd.DataFrame(temporadas)
+        # ordenar por criada_em se existir
+        if 'criada_em' in df.columns:
+            df['criada_em_sort'] = pd.to_datetime(df['criada_em'], errors='coerce')
+            df = df.sort_values(by='criada_em_sort', ascending=False).drop(columns=['criada_em_sort'])
+        return df.reset_index(drop=True)
     except Exception as e:
         st.error(f"Erro ao buscar temporadas: {e}")
         return pd.DataFrame()
@@ -170,10 +201,10 @@ def get_temporadas():
 def get_active_temporada():
     try:
         query = db.collection('temporadas').where('ativa', '==', True).limit(1)
-        docs = query.stream()
-        for doc in docs:
-            temp_data = doc.to_dict()
-            temp_data['id'] = doc.id
+        docs = list(query.stream())
+        if docs:
+            temp_data = docs[0].to_dict() or {}
+            temp_data['id'] = docs[0].id
             return temp_data
         return None
     except Exception as e:
@@ -186,17 +217,17 @@ def get_active_temporada():
 def gerar_round_robin(temporada_id):
     try:
         players = get_players()
-        if len(players) < 2:
+        if players.empty or len(players) < 2:
             return "Número insuficiente de jogadores (mínimo 2)."
         
         # Verificar se já existem confrontos
         existing_query = db.collection('rodadas').where('temporada_id', '==', temporada_id)
-        existing_docs = existing_query.stream()
-        if len(list(existing_docs)) > 0:
+        existing_docs = list(existing_query.stream())
+        if len(existing_docs) > 0:
             return "Confrontos já foram gerados para esta temporada."
         
         # Gerar pares
-        player_ids = players['id'].tolist()
+        player_ids = players['id'].astype(str).tolist()
         pares = list(itertools.combinations(player_ids, 2))
         
         # Distribuir em rodadas
@@ -208,8 +239,8 @@ def gerar_round_robin(temporada_id):
             rodada_data = {
                 'temporada_id': temporada_id,
                 'rodada': rodada_idx,
-                'jogador1_id': p1,
-                'jogador2_id': p2,
+                'jogador1_id': str(p1),
+                'jogador2_id': str(p2),
                 'estrelas_j1': None,
                 'estrelas_j2': None,
                 'porc_j1': None,
@@ -229,24 +260,53 @@ def gerar_round_robin(temporada_id):
 
 def get_rodadas_temporada(temporada_id):
     try:
-        query = db.collection('rodadas').where('temporada_id', '==', temporada_id).order_by('rodada')
-        docs = query.stream()
+        # Evitar order_by no Firestore para não precisar de índice composto:
+        query = db.collection('rodadas').where('temporada_id', '==', temporada_id)
+        docs = list(query.stream())
         
         rodadas = []
         for doc in docs:
-            rodada_data = doc.to_dict()
+            rodada_data = doc.to_dict() or {}
             rodada_data['id'] = doc.id
             
-            # Buscar nomes dos jogadores
-            j1_doc = db.collection('jogadores').document(rodada_data['jogador1_id']).get()
-            j2_doc = db.collection('jogadores').document(rodada_data['jogador2_id']).get()
+            # Buscar nomes dos jogadores (se existirem)
+            j1_id = str(rodada_data.get('jogador1_id', '')) if rodada_data.get('jogador1_id') is not None else ''
+            j2_id = str(rodada_data.get('jogador2_id', '')) if rodada_data.get('jogador2_id') is not None else ''
             
-            rodada_data['jogador1'] = j1_doc.to_dict().get('nome', 'N/A') if j1_doc.exists else 'N/A'
-            rodada_data['jogador2'] = j2_doc.to_dict().get('nome', 'N/A') if j2_doc.exists else 'N/A'
+            if j1_id:
+                j1_doc = db.collection('jogadores').document(j1_id).get()
+                rodada_data['jogador1'] = j1_doc.to_dict().get('nome', 'N/A') if j1_doc.exists else 'N/A'
+            else:
+                rodada_data['jogador1'] = 'N/A'
+            if j2_id:
+                j2_doc = db.collection('jogadores').document(j2_id).get()
+                rodada_data['jogador2'] = j2_doc.to_dict().get('nome', 'N/A') if j2_doc.exists else 'N/A'
+            else:
+                rodada_data['jogador2'] = 'N/A'
             
+            # Normalize types for sorting later
+            try:
+                rodada_data['rodada'] = int(rodada_data.get('rodada')) if rodada_data.get('rodada') is not None else 0
+            except Exception:
+                rodada_data['rodada'] = 0
+            # ensure numeric types where possible
+            for k in ('estrelas_j1','estrelas_j2'):
+                v = rodada_data.get(k)
+                rodada_data[k] = int(v) if isinstance(v, (int, float)) else (int(v) if v and str(v).isdigit() else None)
+            for k in ('porc_j1','porc_j2','tempo_j1','tempo_j2'):
+                v = rodada_data.get(k)
+                try:
+                    rodada_data[k] = float(v) if v is not None else None
+                except Exception:
+                    rodada_data[k] = None
+
             rodadas.append(rodada_data)
         
-        return pd.DataFrame(rodadas)
+        if not rodadas:
+            return pd.DataFrame()
+        df = pd.DataFrame(rodadas)
+        df = df.sort_values(by=['rodada', 'id']).reset_index(drop=True)
+        return df
     except Exception as e:
         st.error(f"Erro ao buscar rodadas: {e}")
         return pd.DataFrame()
@@ -283,7 +343,7 @@ def registrar_resultado(rodada_id, e1, e2, p1, p2, t1, t2):
         elif vencedor == 0:
             resultado = 'empate_rematch'
             
-        db.collection('rodadas').document(rodada_id).update({
+        db.collection('rodadas').document(str(rodada_id)).update({
             'estrelas_j1': int(e1),
             'estrelas_j2': int(e2),
             'porc_j1': float(p1),
@@ -309,8 +369,8 @@ def calcular_classificacao(temporada_id):
     players = {}
     for _, row in rodadas.iterrows():
         for side in [1,2]:
-            pid = row[f'jogador{side}_id']
-            pname = row[f'jogador{side}']
+            pid = row.get(f'jogador{side}_id')
+            pname = row.get(f'jogador{side}')
             if pid not in players:
                 players[pid] = {
                     'jogador': pname,
@@ -325,17 +385,17 @@ def calcular_classificacao(temporada_id):
                     'partidas': 0
                 }
         
-        if pd.isna(row['estrelas_j1']) or pd.isna(row['estrelas_j2']):
+        if pd.isna(row.get('estrelas_j1')) or pd.isna(row.get('estrelas_j2')):
             continue
             
-        j1 = row['jogador1_id']
-        j2 = row['jogador2_id']
-        e1 = int(row['estrelas_j1'])
-        e2 = int(row['estrelas_j2'])
-        p1 = float(row['porc_j1']) if not pd.isna(row['porc_j1']) else 0.0
-        p2 = float(row['porc_j2']) if not pd.isna(row['porc_j2']) else 0.0
-        t1 = float(row['tempo_j1']) if not pd.isna(row['tempo_j1']) else 0.0
-        t2 = float(row['tempo_j2']) if not pd.isna(row['tempo_j2']) else 0.0
+        j1 = row.get('jogador1_id')
+        j2 = row.get('jogador2_id')
+        e1 = int(row.get('estrelas_j1')) if row.get('estrelas_j1') is not None else 0
+        e2 = int(row.get('estrelas_j2')) if row.get('estrelas_j2') is not None else 0
+        p1 = float(row.get('porc_j1')) if row.get('porc_j1') is not None else 0.0
+        p2 = float(row.get('porc_j2')) if row.get('porc_j2') is not None else 0.0
+        t1 = float(row.get('tempo_j1')) if row.get('tempo_j1') is not None else 0.0
+        t2 = float(row.get('tempo_j2')) if row.get('tempo_j2') is not None else 0.0
 
         players[j1]['partidas'] += 1
         players[j2]['partidas'] += 1
@@ -394,23 +454,30 @@ def calcular_classificacao(temporada_id):
 def get_historico_jogador(temporada_id, jogador_id):
     try:
         query = db.collection('rodadas').where('temporada_id', '==', temporada_id)
-        docs = query.stream()
+        docs = list(query.stream())
         
         historico = []
         for doc in docs:
-            rodada_data = doc.to_dict()
-            if rodada_data['jogador1_id'] == jogador_id or rodada_data['jogador2_id'] == jogador_id:
+            rodada_data = doc.to_dict() or {}
+            if str(rodada_data.get('jogador1_id')) == str(jogador_id) or str(rodada_data.get('jogador2_id')) == str(jogador_id):
                 rodada_data['id'] = doc.id
                 
-                j1_doc = db.collection('jogadores').document(rodada_data['jogador1_id']).get()
-                j2_doc = db.collection('jogadores').document(rodada_data['jogador2_id']).get()
+                j1_doc = db.collection('jogadores').document(str(rodada_data.get('jogador1_id'))).get()
+                j2_doc = db.collection('jogadores').document(str(rodada_data.get('jogador2_id'))).get()
                 
                 rodada_data['jogador1'] = j1_doc.to_dict().get('nome', 'N/A') if j1_doc.exists else 'N/A'
                 rodada_data['jogador2'] = j2_doc.to_dict().get('nome', 'N/A') if j2_doc.exists else 'N/A'
                 
                 historico.append(rodada_data)
         
-        return pd.DataFrame(historico)
+        if not historico:
+            return pd.DataFrame()
+        df = pd.DataFrame(historico)
+        # ordenar por rodada
+        if 'rodada' in df.columns:
+            df['rodada'] = pd.to_numeric(df['rodada'], errors='coerce').fillna(0).astype(int)
+            df = df.sort_values(by='rodada').reset_index(drop=True)
+        return df
     except Exception as e:
         st.error(f"Erro ao buscar histórico: {e}")
         return pd.DataFrame()
@@ -427,7 +494,7 @@ if 'user' not in st.session_state:
     st.session_state['is_admin'] = False
     st.session_state['logged_in'] = False
 
-# --- Auth / setup ---
+# --- Auth / setup (sidebar) ---
 with st.sidebar:
     st.markdown("### Usuário")
     if not get_admin_exists():
@@ -466,19 +533,18 @@ with st.sidebar:
                 st.session_state['user'] = None
                 st.session_state['is_admin'] = False
                 st.session_state['logged_in'] = False
-                st.rerun()
+                st.experimental_rerun()
 
-menu = st.sidebar.selectbox("Menu", [
-    "Público - Classificação & Confrontos",
-    "Minha Conta",
-    "Classificação",
-    "Rodadas",
-    "Cadastrar Resultados",
-    "Jogadores",
-    "Temporadas",
-    "Histórico Individual",
-    "Exportar CSV"
-])
+# Build menu dynamically based on permissions
+menu_items = ["Público - Classificação & Confrontos", "Minha Conta"]
+if st.session_state['logged_in']:
+    # logged users can view classification, rodadas, historico
+    menu_items += ["Classificação", "Rodadas", "Histórico Individual"]
+    if st.session_state['is_admin']:
+        # admin-only features
+        menu_items += ["Cadastrar Resultados", "Jogadores", "Temporadas"]
+# show the menu
+menu = st.sidebar.selectbox("Menu", menu_items)
 
 # ---------------------------
 # PÚBLICO
@@ -489,15 +555,15 @@ if menu == "Público - Classificação & Confrontos":
     if active is None:
         st.info("Nenhuma temporada ativa.")
     else:
-        st.markdown(f"### Temporada ativa: **{active['nome']}** (ID {active['id']})")
-        df = calcular_classificacao(active['id'])
+        st.markdown(f"### Temporada ativa: **{active.get('nome','-')}** (ID {active.get('id')})")
+        df = calcular_classificacao(active.get('id'))
         if df.empty:
             st.info("Ainda não há resultados registrados nesta temporada.")
         else:
             st.dataframe(df[['Posição','jogador','pontos','saldo_estrelas','porc_ataque_avg','tempo_ataque_avg']], use_container_width=True)
         st.markdown('---')
         st.markdown('### Confrontos públicos (somente leitura)')
-        rod = get_rodadas_temporada(active['id'])
+        rod = get_rodadas_temporada(active.get('id'))
         if rod.empty:
             st.info('Confrontos não gerados ainda.')
         else:
@@ -523,7 +589,7 @@ elif menu == "Classificação":
     if active is None:
         st.info("Nenhuma temporada ativa. Crie e ative uma na aba 'Temporadas'.")
     else:
-        df = calcular_classificacao(active['id'])
+        df = calcular_classificacao(active.get('id'))
         if df.empty:
             st.info("Ainda não há resultados registrados nesta temporada.")
         else:
@@ -538,7 +604,7 @@ elif menu == "Rodadas":
     if active is None:
         st.info("Nenhuma temporada ativa. Crie e ative uma temporada na aba 'Temporadas'.")
     else:
-        rod = get_rodadas_temporada(active['id'])
+        rod = get_rodadas_temporada(active.get('id'))
         if rod.empty:
             st.info("Confrontos não gerados ainda. Use 'Temporadas' -> 'Gerar confrontos' (admin).")
         else:
@@ -559,11 +625,14 @@ elif menu == "Cadastrar Resultados":
         if active is None:
             st.info("Nenhuma temporada ativa.")
         else:
-            rod = get_rodadas_temporada(active['id'])
+            rod = get_rodadas_temporada(active.get('id'))
             if rod.empty:
                 st.info("Nenhum confronto gerado para esta temporada.")
             else:
-                choices = rod.apply(lambda r: f"ID {r['id']}: {r['jogador1']} vs {r['jogador2']} (R{r['rodada']})", axis=1).tolist()
+                # build choices
+                choices = []
+                for _, r in rod.iterrows():
+                    choices.append(f"ID {r['id']}: {r['jogador1']} vs {r['jogador2']} (R{r['rodada']})")
                 sel = st.selectbox("Escolha o confronto", choices)
                 cid = sel.split()[1].strip(':')
                 row = rod[rod['id']==cid].iloc[0]
@@ -580,8 +649,12 @@ elif menu == "Cadastrar Resultados":
                     resultado = registrar_resultado(cid, int(e1), int(e2), float(p1), float(p2), float(t1), float(t2))
                     if resultado == 'empate_rematch':
                         st.warning("Empate exato: marque como 'Rematch' — o sistema registrou como 'empate_rematch'. Refaça o confronto in-game e registre novamente.")
+                    elif resultado is None:
+                        st.error("Erro ao salvar resultado.")
                     else:
                         st.success("Resultado registrado com sucesso ✅")
+                        # refresh view
+                        st.experimental_rerun()
 
 # ---------------------------
 # JOGADORES (ADMIN: CRUD) 
@@ -663,10 +736,14 @@ elif menu == "Temporadas":
         if active is None:
             st.info("Não há temporada ativa.")
         else:
-            st.write(f"Temporada ativa: {active['nome']} (ID {active['id']})")
+            st.write(f"Temporada ativa: {active.get('nome')} (ID {active.get('id')})")
             if st.button("Gerar Round-Robin para temporada ativa"):
-                msg = gerar_round_robin(active['id'])
-                st.success(msg)
+                msg = gerar_round_robin(active.get('id'))
+                if msg:
+                    st.success(msg)
+                else:
+                    st.error("Erro ao gerar confrontos")
+                st.experimental_rerun()
 
 # ---------------------------
 # HISTÓRICO INDIVIDUAL
@@ -683,30 +760,14 @@ elif menu == "Histórico Individual":
         else:
             sel = st.selectbox("Selecione Jogador", players['nome'].tolist())
             pid = players[players['nome']==sel]['id'].iloc[0]
-            hist = get_historico_jogador(active['id'], pid)
+            hist = get_historico_jogador(active.get('id'), pid)
             if hist.empty:
                 st.info("Nenhum confronto registrado para esse jogador nesta temporada.")
             else:
                 st.dataframe(hist[['rodada','jogador1','jogador2','estrelas_j1','estrelas_j2','porc_j1','porc_j2','tempo_j1','tempo_j2','resultado']], use_container_width=True)
 
 # ---------------------------
-# EXPORTAR CSV
-# ---------------------------
-elif menu == "Exportar CSV":
-    st.subheader("📤 Exportar")
-    active = get_active_temporada()
-    if active is None:
-        st.info("Nenhuma temporada ativa.")
-    else:
-        df = calcular_classificacao(active['id'])
-        if df.empty:
-            st.info("Nada para exportar ainda.")
-        else:
-            csv = df.to_csv(index=False).encode('utf-8')
-            st.download_button("Exportar classificação CSV", data=csv, file_name=f"classificacao_temporada_{active['id']}.csv", mime='text/csv')
-
-# ---------------------------
 # FIM
 # ---------------------------
 st.markdown("---")
-st.caption("Sistema com Firebase: dados em tempo real e escalável.")
+st.caption("Sistema com Firebase: dados em tempo real e escalável. (Exportação CSV temporariamente removida)")
