@@ -10,7 +10,7 @@ from firebase_admin import firestore
 # ---------------------------
 # CONFIG
 # ---------------------------
-PAGE_TITLE = "🏆 Liga do 13° - Sistema de Pontos Corridos (Firebase)"
+PAGE_TITLE = "🏆 Liga Interna - 13º Pelotão"
 
 # ---------------------------
 # INICIALIZAÇÃO FIREBASE
@@ -145,6 +145,9 @@ def authenticate(username, password):
 # FUNÇÕES FIREBASE - TEMPORADAS
 # ---------------------------
 def create_temporada(nome):
+    """
+    Cria a temporada e retorna o document id sem executar queries que exijam índices compostos.
+    """
     try:
         # Desativar temporadas ativas
         active_query = db.collection('temporadas').where('ativa', '==', True)
@@ -152,27 +155,15 @@ def create_temporada(nome):
         for doc in active_docs:
             db.collection('temporadas').document(doc.id).update({'ativa': False})
         
-        # Criar nova temporada
+        # Criar nova temporada usando document() para pegar o id sem fazer query
         temporada_data = {
             'nome': nome,
             'ativa': True,
             'criada_em': datetime.utcnow().isoformat()
         }
-        new_ref = db.collection('temporadas').add(temporada_data)
-        # new_ref returns (DocumentReference, write_time) — DocumentReference is index 0 in some admin versions, but add() returns tuple
-        # To be safe, fetch last added via query by created timestamp
-        # We'll attempt to return the new doc id intelligently:
-        if isinstance(new_ref, tuple) and len(new_ref) >= 1:
-            doc_ref = new_ref[0]
-            try:
-                return doc_ref.id
-            except Exception:
-                pass
-        # fallback: try to find by nome and criada_em recent
-        recent = list(db.collection('temporadas').where('nome', '==', nome).order_by('criada_em', direction=firestore.Query.DESCENDING).limit(1).stream())
-        if recent:
-            return recent[0].id
-        return None
+        doc_ref = db.collection('temporadas').document()  # gera ID sem gravação ainda
+        doc_ref.set(temporada_data)
+        return doc_ref.id
     except Exception as e:
         st.error(f"Erro ao criar temporada: {e}")
         return None
@@ -614,7 +605,7 @@ elif menu == "Rodadas":
                 st.dataframe(sub.rename(columns={'id':'Confronto ID','jogador1':'Jogador 1','jogador2':'Jogador 2','estrelas_j1':'E1','estrelas_j2':'E2'}), use_container_width=True)
 
 # ---------------------------
-# CADASTRAR RESULTADOS (APENAS ADMIN)
+# CADASTRAR RESULTADOS (APENAS ADMIN) - usando st.form para evitar re-render a cada input
 # ---------------------------
 elif menu == "Cadastrar Resultados":
     st.subheader("✍️ Registrar Resultado (Admin)")
@@ -638,23 +629,24 @@ elif menu == "Cadastrar Resultados":
                 row = rod[rod['id']==cid].iloc[0]
                 st.markdown(f"**{row['jogador1']}** vs **{row['jogador2']}** (Rodada {row['rodada']})")
 
-                e1 = st.number_input(f"⭐ Estrelas {row['jogador1']}", 0, 3, value=int(row['estrelas_j1']) if not pd.isna(row['estrelas_j1']) else 0)
-                e2 = st.number_input(f"⭐ Estrelas {row['jogador2']}", 0, 3, value=int(row['estrelas_j2']) if not pd.isna(row['estrelas_j2']) else 0)
-                p1 = st.number_input(f"% Ataque {row['jogador1']}", 0.0, 100.0, value=float(row['porc_j1']) if not pd.isna(row['porc_j1']) else 0.0, step=0.1)
-                p2 = st.number_input(f"% Ataque {row['jogador2']}", 0.0, 100.0, value=float(row['porc_j2']) if not pd.isna(row['porc_j2']) else 0.0, step=0.1)
-                t1 = st.number_input(f"⏱️ Tempo {row['jogador1']} (segundos)", 0.0, 9999.0, value=float(row['tempo_j1']) if not pd.isna(row['tempo_j1']) else 0.0, step=1.0)
-                t2 = st.number_input(f"⏱️ Tempo {row['jogador2']} (segundos)", 0.0, 9999.0, value=float(row['tempo_j2']) if not pd.isna(row['tempo_j2']) else 0.0, step=1.0)
+                with st.form("form_registrar_resultado"):
+                    e1 = st.number_input(f"⭐ Estrelas {row['jogador1']}", 0, 3, value=int(row['estrelas_j1']) if not pd.isna(row['estrelas_j1']) else 0)
+                    e2 = st.number_input(f"⭐ Estrelas {row['jogador2']}", 0, 3, value=int(row['estrelas_j2']) if not pd.isna(row['estrelas_j2']) else 0)
+                    p1 = st.number_input(f"% Ataque {row['jogador1']}", 0.0, 100.0, value=float(row['porc_j1']) if not pd.isna(row['porc_j1']) else 0.0, step=0.1)
+                    p2 = st.number_input(f"% Ataque {row['jogador2']}", 0.0, 100.0, value=float(row['porc_j2']) if not pd.isna(row['porc_j2']) else 0.0, step=0.1)
+                    t1 = st.number_input(f"⏱️ Tempo {row['jogador1']} (segundos)", 0.0, 9999.0, value=float(row['tempo_j1']) if not pd.isna(row['tempo_j1']) else 0.0, step=1.0)
+                    t2 = st.number_input(f"⏱️ Tempo {row['jogador2']} (segundos)", 0.0, 9999.0, value=float(row['tempo_j2']) if not pd.isna(row['tempo_j2']) else 0.0, step=1.0)
 
-                if st.button("Salvar Resultado"):
-                    resultado = registrar_resultado(cid, int(e1), int(e2), float(p1), float(p2), float(t1), float(t2))
-                    if resultado == 'empate_rematch':
-                        st.warning("Empate exato: marque como 'Rematch' — o sistema registrou como 'empate_rematch'. Refaça o confronto in-game e registre novamente.")
-                    elif resultado is None:
-                        st.error("Erro ao salvar resultado.")
-                    else:
-                        st.success("Resultado registrado com sucesso ✅")
-                        # refresh view
-                        st.experimental_rerun()
+                    submit = st.form_submit_button("Salvar Resultado")
+                    if submit:
+                        resultado = registrar_resultado(cid, int(e1), int(e2), float(p1), float(p2), float(t1), float(t2))
+                        if resultado == 'empate_rematch':
+                            st.warning("Empate exato: marque como 'Rematch' — o sistema registrou como 'empate_rematch'. Refaça o confronto in-game e registre novamente.")
+                        elif resultado is None:
+                            st.error("Erro ao salvar resultado.")
+                        else:
+                            st.success("Resultado registrado com sucesso ✅")
+                            st.experimental_rerun()
 
 # ---------------------------
 # JOGADORES (ADMIN: CRUD) 
@@ -727,23 +719,10 @@ elif menu == "Temporadas":
                     st.success(f"Temporada criada e ativada: {nome} (ID {tid})")
                 else:
                     st.error("Erro ao criar temporada")
+                st.experimental_rerun()
         st.markdown("---")
         temporadas = get_temporadas()
         st.dataframe(temporadas, use_container_width=True)
-
-        st.markdown("### Gerar confrontos para a temporada ativa")
-        active = get_active_temporada()
-        if active is None:
-            st.info("Não há temporada ativa.")
-        else:
-            st.write(f"Temporada ativa: {active.get('nome')} (ID {active.get('id')})")
-            if st.button("Gerar Round-Robin para temporada ativa"):
-                msg = gerar_round_robin(active.get('id'))
-                if msg:
-                    st.success(msg)
-                else:
-                    st.error("Erro ao gerar confrontos")
-                st.experimental_rerun()
 
 # ---------------------------
 # HISTÓRICO INDIVIDUAL
@@ -770,4 +749,4 @@ elif menu == "Histórico Individual":
 # FIM
 # ---------------------------
 st.markdown("---")
-st.caption("Sistema com Firebase: dados em tempo real e escalável. (Exportação CSV temporariamente removida)")
+st.caption("© 13º Pelotão. Todos os direitos reservados || Cabo ~ Loki ~ Necrod)")
