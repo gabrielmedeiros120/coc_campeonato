@@ -205,47 +205,75 @@ def get_active_temporada():
 # ---------------------------
 # FUNÇÕES FIREBASE - RODADAS
 # ---------------------------
+# -----------------------------------------
+# Helper: gera pares round-robin (método do círculo)
+# Retorna: lista de rodadas; cada rodada é lista de tuplas (id1, id2)
+# -----------------------------------------
+def generate_round_robin_pairs(ids):
+    ids = list(ids)
+    n = len(ids)
+    bye = None
+    # se ímpar, adiciona bye (fica sem jogo naquela rodada)
+    if n % 2 == 1:
+        ids.append(bye)
+        n += 1
+    rounds = []
+    arr = ids[:]
+    for i in range(n - 1):
+        pairs = []
+        for j in range(n // 2):
+            a = arr[j]
+            b = arr[n - 1 - j]
+            if a is not None and b is not None:
+                pairs.append((a, b))
+        # rotação: mantém arr[0] fixo, rotaciona o resto à direita
+        arr = [arr[0]] + [arr[-1]] + arr[1:-1]
+        rounds.append(pairs)
+    return rounds
+
+# -----------------------------------------
+# Função do app que insere no Firestore usando o helper acima
+# Substitui a implementação antiga de gerar_round_robin
+# -----------------------------------------
 def gerar_round_robin(temporada_id):
     try:
-        players = get_players()
-        if players.empty or len(players) < 2:
+        players_df = get_players()  # sua função que busca jogadores do Firestore
+        if players_df.empty or len(players_df) < 2:
             return "Número insuficiente de jogadores (mínimo 2)."
-        
-        # Verificar se já existem confrontos
+
+        # Se já existirem confrontos, impedimos duplicação (opcional: você pode forçar recriação)
         existing_query = db.collection('rodadas').where('temporada_id', '==', temporada_id)
         existing_docs = list(existing_query.stream())
         if len(existing_docs) > 0:
             return "Confrontos já foram gerados para esta temporada."
-        
-        # Gerar pares
-        player_ids = players['id'].astype(str).tolist()
-        pares = list(itertools.combinations(player_ids, 2))
-        
-        # Distribuir em rodadas
-        n = len(player_ids)
-        R = max(1, n - 1)
-        rodada_idx = 1
-        
-        for p1, p2 in pares:
-            rodada_data = {
-                'temporada_id': temporada_id,
-                'rodada': rodada_idx,
-                'jogador1_id': str(p1),
-                'jogador2_id': str(p2),
-                'estrelas_j1': None,
-                'estrelas_j2': None,
-                'porc_j1': None,
-                'porc_j2': None,
-                'tempo_j1': None,
-                'tempo_j2': None,
-                'resultado': None,
-                'registrado_em': None
-            }
-            db.collection('rodadas').add(rodada_data)
-            rodada_idx = 1 if rodada_idx >= R else rodada_idx + 1
-        
-        return f"Gerados {len(pares)} confrontos em {R} rodadas."
-        
+
+        # lista de ids (strings)
+        player_ids = players_df['id'].astype(str).tolist()
+
+        # gera pairs usando algoritmo round-robin
+        rounds_pairs = generate_round_robin_pairs(player_ids)
+        R = len(rounds_pairs)
+
+        # inserir no Firestore: rodada index começando em 1
+        for rodada_idx, pairs in enumerate(rounds_pairs, start=1):
+            for p1, p2 in pairs:
+                rodada_data = {
+                    'temporada_id': temporada_id,
+                    'rodada': rodada_idx,
+                    'jogador1_id': str(p1),
+                    'jogador2_id': str(p2),
+                    'estrelas_j1': None,
+                    'estrelas_j2': None,
+                    'porc_j1': None,
+                    'porc_j2': None,
+                    'tempo_j1': None,
+                    'tempo_j2': None,
+                    'resultado': None,
+                    'registrado_em': None
+                }
+                db.collection('rodadas').add(rodada_data)
+
+        return f"Gerados {sum(len(p) for p in rounds_pairs)} confrontos em {R} rodadas."
     except Exception as e:
         return f"Erro ao gerar round-robin: {e}"
 
